@@ -1,0 +1,21 @@
+[Unit]
+Description=DDNet servers.json mirror (Service A)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ddnet
+Group=ddnet
+WorkingDirectory=/opt/ddnet-serverlist-mirror
+ExecStart=/opt/ddnet-serverlist-mirror/.venv/bin/ddnet-mirror --config /opt/ddnet-serverlist-mirror/config.yaml
+Restart=on-failure
+RestartSec=5
+# `systemctl reload ddnet-mirror` sends SIGHUP -> hot config reload
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

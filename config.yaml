@@ -1,0 +1,55 @@
+# DDNet server list mirror - default configuration
+# Hot-reload via SIGHUP: systemctl reload ddnet-mirror (or: kill -HUP <pid>)
+
+server:
+  host: 0.0.0.0
+  port: 8080
+
+logging:
+  level: INFO
+  dir: logs
+
+cache:
+  path: var/servers.json
+
+upstream:
+  endpoints:
+    - https://master1.ddnet.org/ddnet/15/servers.json
+    - https://master2.ddnet.org/ddnet/15/servers.json
+    - https://master3.ddnet.org/ddnet/15/servers.json
+    - https://master4.ddnet.org/ddnet/15/servers.json
+  timeout_s: 20
+  retries: 2
+  impersonate: chrome
+
+throttle:
+  min_interval_s: 1
+
+background:
+  base_interval_s: 60
+  # consecutive intervals with no immediate request before backing off
+  extend_after_idle_cycles: 5
+  extended_interval_s: 300
+
+bypass:
+  base_url: http://127.0.0.1:9100
+  timeout_s: 30
+  cookie_ttl_s: 1800
+  auth_token: null
+  # Cloudflare Access Service Token, sent as Cf-Access-Client-Id/Secret
+  # (edge-level auth in front of a Cloudflare Tunnel to the bypass host).
+  access_client_id: null
+  access_client_secret: null
+
+datasources:
+  # - name: third-party
+  #   type: http            # http | file | db(stub)
+  #   url: https://example/api/servers.json
+  #   strategy: merge       # append | merge | override | additional
+  #   key: address          # dedupe key for merge
+  #   target_key: external  # top-level key for additional
+  #   enabled: true
+
+health:
+  probe_interval_s: 30
+  upstream_timeout_s: 5

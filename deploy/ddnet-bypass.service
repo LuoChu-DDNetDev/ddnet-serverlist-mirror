@@ -1,0 +1,21 @@
+[Unit]
+Description=DDNet nodriver Cloudflare challenge solver (Service B)
+After=network-online.target
+Wants=network-online.target
+
+# Runs on the machine with a GUI / display where a real browser can start.
+# If the machine has a display, add: Environment=DISPLAY=:0
+
+[Service]
+Type=simple
+User=ddnet
+Group=ddnet
+WorkingDirectory=/opt/ddnet-serverlist-mirror
+ExecStart=/opt/ddnet-serverlist-mirror/.venv/bin/ddnet-bypass --host 0.0.0.0 --port 9100 --token CHANGE_ME
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,47 @@
+[project]
+name = "ddnet-serverlist-mirror"
+version = "0.1.0"
+description = "DDNet official server list mirror with Cloudflare bypass"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.141.0",
+    "uvicorn[standard]>=0.30.0",
+    "curl_cffi>=0.16.0",
+    "httpx>=0.27.0",
+    "pyyaml>=6.0.2",
+    "pydantic>=2.7.0",
+]
+
+[project.optional-dependencies]
+bypass = ["nodriver>=0.50.0"]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "ruff>=0.9.0",
+]
+
+[project.scripts]
+ddnet-mirror = "ddnet_mirror.main:main"
+ddnet-bypass = "ddnet_bypass.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ddnet_mirror", "src/ddnet_bypass"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]
