@@ -20,6 +20,8 @@ class ServerConfig(BaseModel):
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     dir: str = "logs"
+    max_bytes: int = 5 * 1024 * 1024  # rotate a single file once it exceeds this
+    max_age_seconds: float = 7 * 24 * 3600  # rotate a file once it is this old
 
 
 class CacheConfig(BaseModel):
@@ -81,8 +83,9 @@ class DataSourceConfig(BaseModel):
 
 
 class HealthConfig(BaseModel):
-    probe_interval_s: float = 30.0
-    upstream_timeout_s: float = 5.0
+    # No probe loop by design: master health comes from the round-robin refresh
+    # poll state, bypass health from on-use. Reserved for future knobs.
+    pass
 
 
 class AppConfig(BaseModel):

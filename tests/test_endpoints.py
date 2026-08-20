@@ -113,3 +113,45 @@ async def test_missing_cache_returns_503(tmp_path):
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
         r = await client.get("/api/v1/servers")
     assert r.status_code == 503
+
+@pytest.mark.asyncio
+async def test_favicon_returns_assets_file(tmp_path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "favicon.ico").write_bytes(b"\x00\x00ICO")
+    data = {
+        "upstream": {"endpoints": ["https://m.example/x.json"]},
+        "cache": {"path": str(tmp_path / "s.json")},
+    }
+    p = tmp_path / "c2.yaml"
+    p.write_text(yaml.safe_dump(data), encoding="utf-8")
+    mgr = ConfigManager(p)
+    store2 = CacheStore(mgr.config.cache.path)
+    store2.write(b"{}")
+    orch = RefreshOrchestrator(mgr, store2, lambda: asyncio.sleep(0))
+    fav = create_app(mgr, orch, None, assets_dir=assets)
+    transport = httpx.ASGITransport(app=fav)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        r = await client.get("/favicon.ico")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/x-icon"
+    assert r.content == b"\x00\x00ICO"
+
+
+@pytest.mark.asyncio
+async def test_favicon_404_when_missing(tmp_path):
+    data = {
+        "upstream": {"endpoints": ["https://m.example/x.json"]},
+        "cache": {"path": str(tmp_path / "s.json")},
+    }
+    p = tmp_path / "c3.yaml"
+    p.write_text(yaml.safe_dump(data), encoding="utf-8")
+    mgr = ConfigManager(p)
+    store = CacheStore(mgr.config.cache.path)
+    store.write(b"{}")
+    orch = RefreshOrchestrator(mgr, store, lambda: asyncio.sleep(0))
+    fav = create_app(mgr, orch, None, assets_dir=tmp_path / "no-such-assets")
+    transport = httpx.ASGITransport(app=fav)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        r = await client.get("/favicon.ico")
+    assert r.status_code == 404

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Response
 
 from .config import ConfigManager
@@ -15,8 +17,21 @@ def create_app(
     manager: ConfigManager,
     orchestrator: RefreshOrchestrator,
     health: HealthAggregator | None = None,
+    assets_dir: str | Path = "assets",
 ) -> FastAPI:
     app = FastAPI(title="DDNet server list mirror", version="0.1.0")
+
+    def _favicon() -> Response:
+        p = Path(assets_dir) / "favicon.ico"
+        try:
+            data = p.read_bytes()
+        except OSError:
+            raise HTTPException(status_code=404, detail="no favicon configured") from None
+        return Response(content=data, media_type="image/x-icon")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Response:
+        return _favicon()
 
     async def _servers_immediate() -> Response:
         data = await orchestrator.get_immediate()

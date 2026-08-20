@@ -8,6 +8,7 @@ import json
 import logging
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 import uvicorn
@@ -16,6 +17,7 @@ from .cache import CacheStore
 from .config import ConfigManager
 from .datasources import apply_datasources, build_source
 from .health import HealthAggregator
+from .logs import StartupRotatingFileHandler
 from .nodriver_client import NodriverClient
 from .throttler import RefreshOrchestrator
 from .upstream import UpstreamClient
@@ -29,7 +31,15 @@ def _setup_logging(cfg) -> None:
         try:
             log_dir = Path(cfg.logging.dir)
             log_dir.mkdir(parents=True, exist_ok=True)
-            handlers.append(logging.FileHandler(log_dir / "mirror.log"))
+            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            path = log_dir / f"mirror_{stamp}.log"
+            handlers.append(
+                StartupRotatingFileHandler(
+                    str(path),
+                    max_bytes=cfg.logging.max_bytes,
+                    max_age_seconds=cfg.logging.max_age_seconds,
+                )
+            )
         except OSError:
             pass
     logging.basicConfig(

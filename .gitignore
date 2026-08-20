@@ -18,3 +18,4 @@ logs/
 .mypy_cache/
 
 config.yaml
+server.json

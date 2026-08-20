@@ -118,3 +118,24 @@ def test_tick_idle_backoff_then_restore_base(tmp_path):
     idle, interval = orch._decide(250.0, 200.0, 60.0)
     assert idle == 0
     assert interval == bg.base_interval_s
+
+def test_jitter_bounds():
+    import random
+
+    rng = random.Random(7)
+    manager, store = make_manager_with_dummy()
+    orch = RefreshOrchestrator(manager, store, lambda: None, rng=rng)
+    base = manager.config.background.base_interval_s  # 60
+    # jitter is +/-8% around the interval
+    sleeps = [orch._jittered(base) for _ in range(200)]
+    assert all(base * 0.92 <= s <= base * 1.08 for s in sleeps)
+    # distribution actually moves, not constant
+    assert len(set(round(s, 3) for s in sleeps)) > 50
+
+
+def make_manager_with_dummy():
+    import tempfile
+    from pathlib import Path
+
+    d = Path(tempfile.mkdtemp())
+    return make_manager(d)

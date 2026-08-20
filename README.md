@@ -49,9 +49,14 @@ All data endpoints return the upstream body byte-for-byte with
 - Background refresh runs every `background.base_interval_s` (1min). After
   `extend_after_idle_cycles` (5) consecutive cycles with no immediate request it
   backs off to `extended_interval_s` (5min). Any immediate request resets the
-  counters and restores the base cadence.
+  counters and restores the base cadence. Sleeps are jittered (±5s at 1min,
+  ±30s at 5min) so upstreams cannot detect a fixed polling rhythm.
 - Upstream load is round-robin across the four masters; a failed or
-  challenge-gated endpoint falls through to the next one.
+  challenge-gated endpoint falls through to the next one. Each background cycle
+  polls **one** master (rotating), not all four.
+- `/api/v1/health` shows this round-robin poll state — no separate probe loop,
+  so checking health never adds load to the masters. The bypass service status
+  updates only when it is actually used to solve a challenge.
 - If every upstream fails, the last cached copy is still served and
   `/api/v1/health` reports `status: degraded`.
 

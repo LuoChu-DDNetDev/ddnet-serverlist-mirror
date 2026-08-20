@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from collections.abc import Awaitable, Callable
 
@@ -22,6 +23,10 @@ from .cache import CacheStore
 from .config import BackgroundConfig, ConfigManager, ThrottleConfig
 
 logger = logging.getLogger(__name__)
+
+# Jitter (fraction) added to background sleep so upstreams cannot detect a fixed
+# polling rhythm: base_interval ±6s and extended_interval ±30s at the defaults.
+JITTER = 0.1
 
 
 class RefreshOrchestrator:
@@ -31,11 +36,13 @@ class RefreshOrchestrator:
         cache: CacheStore,
         refresher: Callable[[], Awaitable[None]],
         clock=time.time,
+        rng: random.Random | None = None,
     ) -> None:
         self._manager = manager
         self._cache = cache
         self._refresher = refresher
         self._clock = clock
+        self._rng = rng or random.Random()
         self._in_flight: asyncio.Future | None = None
         self._idle_cycles = 0
         self._last_immediate_ts: float | None = None
@@ -138,7 +145,7 @@ class RefreshOrchestrator:
     async def _run_background(self) -> None:
         while True:
             interval = self._current_interval
-            await asyncio.sleep(interval)
+            await asyncio.sleep(self._jittered(interval))
             self._idle_cycles, self._current_interval = self._decide(
                 self._clock(), self._last_immediate_ts, window=interval
             )
@@ -146,3 +153,7 @@ class RefreshOrchestrator:
                 await self._coalesced_refresh()
             except Exception:  # noqa: BLE001 - already logged inside coalesce
                 pass
+
+    def _jittered(self, interval: float) -> float:
+        """Sleep duration with up to JITTER (10%) random offset to mask the polling rhythm."""
+        return interval * (1.0 + (self._rng.random() * 2 - 1) * JITTER)
