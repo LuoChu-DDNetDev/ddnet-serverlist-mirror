@@ -96,6 +96,14 @@ class AppConfig(BaseModel):
     datasources: list[DataSourceConfig] = Field(default_factory=list)
     health: HealthConfig = Field(default_factory=HealthConfig)
 
+    @field_validator("datasources", mode="before")
+    @classmethod
+    def _datasources_none_to_empty(cls, v):
+        # YAML `datasources:` with no content parses to None; treat as empty list.
+        if v is None:
+            return []
+        return v
+
 
 def load_config(path: str | Path) -> AppConfig:
     """Read + validate a YAML config file into an AppConfig."""

@@ -23,6 +23,20 @@ def write(tmp_path: Path, data: dict) -> Path:
     return p
 
 
+def test_datasources_null_treated_as_empty(tmp_path):
+    data = base_yaml()
+    data["datasources"] = None  # YAML `datasources:` with no content
+    cfg = load_config(write(tmp_path, data))
+    assert cfg.datasources == []
+
+
+def test_datasources_empty_list(tmp_path):
+    data = base_yaml()
+    data["datasources"] = []
+    cfg = load_config(write(tmp_path, data))
+    assert cfg.datasources == []
+
+
 def test_load_minimal(tmp_path):
     cfg = load_config(write(tmp_path, base_yaml()))
     assert isinstance(cfg, AppConfig)
