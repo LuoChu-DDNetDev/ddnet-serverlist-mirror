@@ -32,6 +32,7 @@ uv run ddnet-bypass --port 9100 --token CHANGEME  # service B (different machine
 | Method | Path | Semantics | Upstream? |
 | --- | --- | --- | --- |
 | GET | `/` | same as `/api/v1/servers` | throttled |
+| GET | `/health` | same as `/api/v1/health` | no (background probes) |
 | GET | `/api/v1/servers` | immediate request, fresh data if older than the throttle window | throttled |
 | GET | `/api/v1/servers/cache` | current cached copy, never touches upstream | no |
 | GET | `/api/v1/health` | process / cache / upstream / bypass / config status | no (background probes) |

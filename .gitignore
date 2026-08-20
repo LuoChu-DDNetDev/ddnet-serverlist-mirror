@@ -16,3 +16,5 @@ logs/
 .ruff_cache/
 .coverage
 .mypy_cache/
+
+config.yaml
