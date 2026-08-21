@@ -44,15 +44,15 @@ async def _user_agent(browser: uc.Browser) -> str:
     return str(ua or "")
 
 
-async def solve_cf(url: str, get_browser, timeout: float = 30.0, settle: float = 2.0) -> dict:
+async def solve_cf(url: str, get_browser, timeout_s: float = 30.0, settle: float = 2.0) -> dict:
     """Drive the browser to clear the challenge and harvest cf_clearance cookies.
 
     Returns {"cookies": {name: value}, "user_agent": str, "expires": epoch|None}.
-    Raises TimeoutError if no CF cookie appears within `timeout` seconds.
+    Raises TimeoutError if no CF cookie appears within `timeout_s` seconds.
     """
     browser = await get_browser()
     await browser.get(url)
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + timeout_s
     cookies: dict[str, str] = {}
     last_all: list = []
 
@@ -64,7 +64,7 @@ async def solve_cf(url: str, get_browser, timeout: float = 30.0, settle: float =
         await asyncio.sleep(0.5)
 
     if not any(cookies.get(name) for name in CF_COOKIES):
-        raise TimeoutError(f"no Cloudflare cookie after {timeout:.0f}s for {url}")
+        raise TimeoutError(f"no Cloudflare cookie after {timeout_s:.0f}s for {url}")
 
     if settle:
         await asyncio.sleep(settle)

@@ -44,8 +44,19 @@ class HealthAggregator:
     async def stop(self) -> None:
         return None
 
+    async def async_snapshot(self, probe_ttl: float = 30.0) -> dict:
+        """Snapshot plus a (TTL-limited) liveness probe of each bypass peer.
+
+        Probing B is cheap and touches no master, unlike probing upstream.
+        """
+        try:
+            await self._bypass.probe_peers(ttl=probe_ttl)
+        except Exception:  # noqa: BLE001 - health must never fail because a peer is down
+            pass
+        return self.snapshot()
+
     def snapshot(self) -> dict:
-        self._upstream._sync_endpoints()
+        self._upstream.sync_endpoints()
         upstream_status: dict[str, dict] = {}
         for url in self._upstream.endpoints:
             host = urlparse(url).netloc
@@ -62,6 +73,8 @@ class HealthAggregator:
                 "last_error": st.last_error,
                 "last_ok_ts": st.last_ok_ts,
                 "last_try_ts": st.last_try_ts,
+                "challenges": st.challenges,
+                "challenges_persisted": st.challenges_persisted,
             }
 
         any_up_ok = any(s["ok"] for s in upstream_status.values())

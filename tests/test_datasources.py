@@ -1,5 +1,6 @@
 
 import pytest
+from pydantic import ValidationError
 
 from ddnet_mirror.config import DataSourceConfig
 from ddnet_mirror.datasources import (
@@ -90,9 +91,18 @@ def test_unknown_strategy_raises():
         apply_strategy([], [], "banana")
 
 
+def test_unknown_source_type_rejected_by_config():
+    # `type` is a Literal now, so a typo fails validation (load / SIGHUP reload)
+    # instead of surfacing much later as a runtime DataSourceError.
+    with pytest.raises(ValidationError):
+        cfg(type="nope")
+
+
 def test_unknown_source_type_raises():
+    # build_source keeps its own guard for configs built bypassing validation.
+    bad = DataSourceConfig.model_construct(name="x", type="nope", strategy="append")
     with pytest.raises(DataSourceError):
-        build_source(cfg(type="nope"))
+        build_source(bad)
 
 
 def test_build_known_sources():

@@ -39,7 +39,7 @@ def create_app(token: str | None = None, headless: bool = False, settle: float =
             if auth != f"Bearer {token}":
                 raise HTTPException(status_code=401, detail="unauthorized")
         try:
-            return await solve_cf(req.url, get_browser=bm.get, timeout=req.timeout, settle=settle)
+            return await solve_cf(req.url, get_browser=bm.get, timeout_s=req.timeout, settle=settle)
         except TimeoutError as exc:
             logger.warning("solve timeout: %s", exc)
             raise HTTPException(status_code=504, detail=str(exc)) from exc

@@ -6,6 +6,7 @@ main upstream-serving flow.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -13,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from . import metrics
 from .config import DataSourceConfig
 
 logger = logging.getLogger(__name__)
@@ -62,12 +64,17 @@ class FileSource(DataSource):
         if not self.cfg.path:
             raise DataSourceError(f"datasource {self.name}: missing path")
         try:
-            with open(self.cfg.path, encoding="utf-8") as fh:
-                return json.load(fh)
+            # Off the event loop: a slow disk must not stall serving.
+            return await asyncio.to_thread(self._read, self.cfg.path)
         except OSError as exc:
             raise DataSourceError(f"datasource {self.name}: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise DataSourceError(f"datasource {self.name}: invalid JSON: {exc}") from exc
+
+    @staticmethod
+    def _read(path: str) -> Any:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
 
 
 class DbSource(DataSource):
@@ -92,6 +99,23 @@ def build_source(cfg: DataSourceConfig, http_factory=None) -> DataSource:
     if cls is HttpSource:
         return cls(cfg, http_factory=http_factory)
     return cls(cfg)
+
+
+def build_sources(cfgs: list[DataSourceConfig], http_factory=None) -> list[DataSource]:
+    """Build every enabled source, skipping (and logging) the ones that cannot be built.
+
+    Construction failures must not abort a refresh: external data is optional,
+    the upstream mirror is not.
+    """
+    sources: list[DataSource] = []
+    for cfg in cfgs:
+        if not cfg.enabled:
+            continue
+        try:
+            sources.append(build_source(cfg, http_factory=http_factory))
+        except Exception as exc:  # noqa: BLE001 - isolation is the contract
+            logger.warning("datasource %s could not be built, skipped: %s", cfg.name, exc)
+    return sources
 
 
 def _dedupe(items: list, key: str) -> list:
@@ -150,6 +174,7 @@ async def apply_datasources(base: Any, sources: list[DataSource]) -> Any:
             data = await src.fetch()
         except Exception as exc:  # noqa: BLE001 - isolation is the contract
             logger.warning("datasource %s failed, skipped: %s", src.name, exc)
+            metrics.datasource_failure_total.labels(name=src.name).inc()
             continue
         if src.cfg.strategy == "additional":
             target = src.cfg.target_key or src.name

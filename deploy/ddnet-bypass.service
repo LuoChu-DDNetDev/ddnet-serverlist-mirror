@@ -5,6 +5,15 @@ Wants=network-online.target
 
 # Runs on the machine with a GUI / display where a real browser can start.
 # If the machine has a display, add: Environment=DISPLAY=:0
+#
+# cf_clearance is bound to this machine's egress IP, so service A has to replay
+# the request from here as well. Run a forwarder next to this service (tinyproxy,
+# squid, or `ssh -D`) reachable only from A's address, and point that peer's
+# `proxy_url` in A's config.yaml at it, e.g.:
+#   peers:
+#     - name: gui-box-1
+#       base_url: http://<this-host>:9100
+#       proxy_url: http://<this-host>:8888
 
 [Service]
 Type=simple

@@ -1,5 +1,7 @@
-# DDNet server list mirror - default configuration
-# Hot-reload via SIGHUP: systemctl reload ddnet-mirror (or: kill -HUP <pid>)
+# DDNet server list mirror - full reference configuration.
+# Every key below is shown with its default. Unknown keys are rejected, so a
+# typo fails the load (or the SIGHUP reload) instead of silently doing nothing.
+# Hot-reload: systemctl reload ddnet-mirror (or: kill -HUP <pid>)
 
 server:
   host: 0.0.0.0
@@ -8,9 +10,21 @@ server:
 logging:
   level: INFO
   dir: logs
+  # Startup log file name template; {stamp} is replaced with the startup time
+  # formatted by timestamp_format. Rotated copies get _1, _2, ... suffixes.
+  filename: mirror_{stamp}.log
+  timestamp_format: "%Y-%m-%d_%H-%M-%S"
+  # Rotate a single log file once it exceeds this many bytes (5 MiB) ...
+  max_bytes: 5242880
+  # ... or once it has been open this many seconds (7 days).
+  max_age_seconds: 604800
 
 cache:
   path: var/servers.json
+  # Keep a gzip copy of the body in memory: clients that accept gzip get ~214 KiB
+  # instead of ~1.2 MiB, and it is compressed once per refresh, not per request.
+  precompress: true
+  gzip_level: 6
 
 upstream:
   endpoints:
@@ -21,27 +35,81 @@ upstream:
   timeout_s: 20
   retries: 2
   impersonate: chrome
+  # Hard ceiling for one whole fetch across all endpoints and retries. Must be
+  # >= timeout_s. Without it a fetch could cost endpoints * (1 + retries) * timeout_s.
+  total_budget_s: 25
+  # After this many consecutive failed *fetches* an endpoint drops out of the
+  # round-robin rotation (retries inside one fetch count as one failure).
+  down_after_fails: 2
+  # Seconds before a downed endpoint is re-probed to see whether it recovered.
+  down_retry_after_s: 60
 
 throttle:
-  min_interval_s: 1
+  # Hard floor between two upstream fetches, and the cache freshness cutoff.
+  # Requests inside the window are answered from cache and counted as gated.
+  min_interval_s: 3
+  # How long an immediate request may wait for a synchronous refresh before it
+  # gives up and serves the old cache. The refresh itself keeps running.
+  immediate_budget_s: 5
 
 background:
   base_interval_s: 60
   # consecutive intervals with no immediate request before backing off
   extend_after_idle_cycles: 5
   extended_interval_s: 300
+  # +/- fraction jitter on background sleep to mask the polling rhythm
+  jitter: 0.1
 
 bypass:
-  base_url: http://127.0.0.1:9100
-  timeout_s: 30
-  cookie_ttl_s: 1800
-  auth_token: null
-  # Cloudflare Access Service Token, sent as Cf-Access-Client-Id/Secret
-  # (edge-level auth in front of a Cloudflare Tunnel to the bypass host).
-  access_client_id: null
-  access_client_secret: null
+  # Peers are tried in order: the first one that solves wins, the rest are
+  # fallbacks. A peer that fails down_after_fails times in a row is skipped for
+  # down_retry_after_s.
+  down_after_fails: 2
+  down_retry_after_s: 60
+  peers: []
+  # - name: gui-box-1
+  #   base_url: http://10.0.0.5:9100
+  #   # cf_clearance is bound to the egress IP that solved it, so the replay must
+  #   # leave from this peer's network. Only the bypass path uses this proxy;
+  #   # normal fetches go out directly from service A.
+  #   proxy_url: http://10.0.0.5:8888
+  #   timeout_s: 30
+  #   cookie_ttl_s: 1800
+  #   auth_token: CHANGE_ME            # must match service B's --token
+  #   # Cloudflare Access Service Token, sent as Cf-Access-Client-Id/Secret
+  #   # (edge-level auth in front of a Cloudflare Tunnel to the bypass host).
+  #   access_client_id: null
+  #   access_client_secret: null
+  #   enabled: true
+  # - name: gui-box-2
+  #   base_url: http://10.0.0.9:9100
+  #   proxy_url: socks5h://10.0.0.9:1080
 
-datasources:
+health:
+  # Without a token /health only exposes status, cache freshness and uptime.
+  # With `Authorization: Bearer <token>` it returns the full snapshot (pid,
+  # config path, per-master errors, bypass peers).
+  auth_token: null
+  # Bypass peers are probed on demand at most once per this many seconds.
+  probe_ttl_s: 30
+
+metrics:
+  enabled: true
+  path: /metrics
+  # Falls back to health.auth_token when unset.
+  auth_token: null
+
+limits:
+  enabled: true
+  rps: 5           # sustained requests per second per client
+  burst: 20        # bucket size
+  max_concurrency: 64
+  # Only enable behind a trusted reverse proxy, otherwise clients spoof it.
+  trust_forwarded_for: false
+  exempt_paths: ["/health", "/metrics"]
+  max_tracked_clients: 10000
+
+datasources: []
   # - name: third-party
   #   type: http            # http | file | db(stub)
   #   url: https://example/api/servers.json
@@ -49,7 +117,3 @@ datasources:
   #   key: address          # dedupe key for merge
   #   target_key: external  # top-level key for additional
   #   enabled: true
-
-health:
-  probe_interval_s: 30
-  upstream_timeout_s: 5

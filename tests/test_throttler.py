@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import os
 import time
 
@@ -29,7 +30,7 @@ def set_age(path, age_s):
 
 
 @pytest.mark.asyncio
-async def test_fresh_cache_responds_immediately_with_async_refresh(tmp_path):
+async def test_fresh_cache_answered_without_upstream(tmp_path):
     manager, store = make_manager(tmp_path, b"hot")
     set_age(store.path, 0.3)  # within the (default 3s) fresh window
     calls = []
@@ -40,10 +41,72 @@ async def test_fresh_cache_responds_immediately_with_async_refresh(tmp_path):
     orch = RefreshOrchestrator(manager, store, refresher)
     body = await orch.get_immediate()
     assert body == b"hot"
-    # A background refresh was scheduled (non-blocking) rather than awaited.
-    assert orch._bg_refresh_task is not None
-    await orch._bg_refresh_task  # let it run
-    assert calls == [1]
+    assert calls == []  # cache younger than the window: upstream is not touched
+    assert orch.gated_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_upstream_rate_floor_under_sustained_traffic(tmp_path):
+    """The core promise: at most one upstream fetch per throttle window."""
+    manager, store = make_manager(tmp_path, b"seed")
+    set_age(store.path, 10)  # start stale so the first request does fetch
+    calls = 0
+
+    async def refresher():
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.02)  # simulated upstream round-trip
+        store.write(b"fresh")
+
+    orch = RefreshOrchestrator(manager, store, refresher)
+    assert manager.config.throttle.min_interval_s == 3.0  # window under test
+    t0 = time.time()
+    requests = 0
+    while time.time() - t0 < 1.5:  # half a window, so exactly one fetch is allowed
+        await orch.get_immediate()
+        requests += 1
+        await asyncio.sleep(0.03)
+
+    assert requests > 20  # the load actually happened
+    assert calls == 1, f"{requests} requests caused {calls} upstream fetches"
+    assert orch.gated_requests == requests - 1
+
+
+@pytest.mark.asyncio
+async def test_gate_closed_after_failed_refresh(tmp_path):
+    """A failing upstream must not be hammered once per request either."""
+    manager, store = make_manager(tmp_path, b"stale")
+    set_age(store.path, 30)
+    calls = 0
+
+    async def refresher():
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("upstream down")
+
+    orch = RefreshOrchestrator(manager, store, refresher)
+    for _ in range(10):
+        assert await orch.get_immediate() == b"stale"
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_immediate_budget_serves_cache_and_keeps_refreshing(tmp_path):
+    manager, store = make_manager(tmp_path, b"old")
+    set_age(store.path, 30)
+    manager.config.throttle.immediate_budget_s = 0.05
+    done = asyncio.Event()
+
+    async def refresher():
+        await asyncio.sleep(0.3)  # slower than the immediate budget
+        store.write(b"late")
+        done.set()
+
+    orch = RefreshOrchestrator(manager, store, refresher)
+    body = await orch.get_immediate()
+    assert body == b"old"  # answered from cache instead of waiting 0.3s
+    await asyncio.wait_for(done.wait(), 1.0)  # the refresh was not cancelled
+    assert store.read_raw() == b"late"
 
 
 @pytest.mark.asyncio
@@ -93,6 +156,24 @@ async def test_refresh_failure_serves_stale(tmp_path):
     body = await orch.get_immediate()
     assert body == b"stale"  # degraded: old cache still served
     assert "boom" in (orch.last_refresh_error or "")
+
+
+@pytest.mark.asyncio
+async def test_failed_refresh_does_not_leak_unretrieved_future(tmp_path):
+    manager, store = make_manager(tmp_path, b"stale")
+    set_age(store.path, 30)
+    seen: list[dict] = []
+    asyncio.get_running_loop().set_exception_handler(lambda _loop, ctx: seen.append(ctx))
+
+    async def refresher():
+        raise RuntimeError("boom")
+
+    orch = RefreshOrchestrator(manager, store, refresher)
+    await orch.get_immediate()
+    del orch
+    gc.collect()
+    await asyncio.sleep(0)
+    assert [c for c in seen if "never retrieved" in str(c.get("message", ""))] == []
 
 
 def test_tick_idle_backoff_then_restore_base(tmp_path):

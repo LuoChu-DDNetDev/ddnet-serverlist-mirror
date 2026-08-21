@@ -15,7 +15,7 @@ import uvicorn
 
 from .cache import CacheStore
 from .config import ConfigManager
-from .datasources import apply_datasources, build_source
+from .datasources import apply_datasources, build_sources
 from .health import HealthAggregator
 from .logs import StartupRotatingFileHandler
 from .nodriver_client import NodriverClient
@@ -41,8 +41,8 @@ def _setup_logging(cfg) -> None:
                     max_age_seconds=cfg.logging.max_age_seconds,
                 )
             )
-        except OSError:
-            pass
+        except OSError as exc:
+            print(f"warning: file logging disabled ({exc})", file=sys.stderr)
     logging.basicConfig(
         level=level,
         handlers=handlers,
@@ -52,18 +52,24 @@ def _setup_logging(cfg) -> None:
 
 def _build_refresher(manager, cache, upstream, bypass):
     """Closure that fetches upstream, optionally fuses external sources, persists cache."""
+    log = logging.getLogger("ddnet_mirror.refresh")
+
     async def refresher() -> None:
         result = await upstream.fetch(bypass_solver=bypass.solve)
-        sources = [
-            build_source(cfg) for cfg in manager.config.datasources if cfg.enabled
-        ]
+        payload = result.data  # upstream bytes verbatim unless fusion changes them
+        sources = build_sources(manager.config.datasources)
         if sources:
-            parsed = json.loads(result.data)
-            fused = await apply_datasources(parsed, sources)
-            payload = json.dumps(fused, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            cache.write(payload)
-        else:
-            cache.write(result.data)  # no sources: store upstream bytes verbatim
+            try:
+                parsed = json.loads(result.data)
+                fused = await apply_datasources(parsed, sources)
+                if fused is not parsed:  # every source failed: keep the original bytes
+                    payload = json.dumps(
+                        fused, ensure_ascii=False, separators=(",", ":")
+                    ).encode()
+            except Exception as exc:  # noqa: BLE001 - fusion must never block serving
+                log.warning("datasource fusion failed, storing upstream bytes: %s", exc)
+                payload = result.data
+        cache.write(payload)
 
     return refresher
 
@@ -77,10 +83,19 @@ def main() -> None:
     _setup_logging(manager.config)
     log = logging.getLogger("ddnet_mirror")
 
-    cache = CacheStore(lambda: manager.config.cache.path)
+    cache = CacheStore(
+        lambda: manager.config.cache.path,
+        precompress=manager.config.cache.precompress,
+        gzip_level=manager.config.cache.gzip_level,
+    )
     # Clients read config lazily so SIGHUP reloads apply to them too.
-    upstream = UpstreamClient(lambda: manager.config.upstream)
     bypass = NodriverClient(lambda: manager.config.bypass)
+    upstream = UpstreamClient(
+        lambda: manager.config.upstream,
+        # Reuse a solved clearance (and its egress) instead of getting challenged first.
+        cookie_provider=bypass.peek,
+        challenge_hook=bypass.on_challenge_persisted,
+    )
     orchestrator = RefreshOrchestrator(manager, cache, _build_refresher(manager, cache, upstream, bypass))
     health = HealthAggregator(manager, cache, upstream, bypass)
 
