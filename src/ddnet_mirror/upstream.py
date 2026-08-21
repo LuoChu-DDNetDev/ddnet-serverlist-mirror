@@ -50,7 +50,10 @@ class EndpointStatus:
     url: str
     host: str
     ok: bool = False
-    tries: int = 0
+    total: int = 0  # total attempts against this endpoint
+    fails: int = 0  # failed attempts against this endpoint
+    consec_fails: int = 0  # consecutive failures since the last success
+    down_until: float | None = None  # skip this endpoint in rotation until this time
     latency_ms: float | None = None
     last_error: str | None = None
     last_ok_ts: float | None = None
@@ -118,8 +121,10 @@ class UpstreamClient:
 
     def _mark_ok(self, url: str, latency_ms: float) -> None:
         st = self._statuses[url]
-        st.tries += 1
+        st.total += 1
         st.ok = True
+        st.consec_fails = 0
+        st.down_until = None
         st.latency_ms = latency_ms
         st.last_error = None
         st.last_ok_ts = self._clock()
@@ -127,8 +132,13 @@ class UpstreamClient:
 
     def _mark_fail(self, url: str, err: Exception) -> None:
         st = self._statuses[url]
-        st.tries += 1
+        st.total += 1
+        st.fails += 1
+        st.consec_fails += 1
         st.ok = False
+        down_after = self._cfg().down_after_fails
+        if st.consec_fails >= down_after:
+            st.down_until = self._clock() + self._cfg().down_retry_after_s
         st.last_error = f"{type(err).__name__}: {err}"
         st.last_try_ts = self._clock()
 
@@ -155,9 +165,10 @@ class UpstreamClient:
     ) -> FetchResult:
         """Load-balanced fetch; returns the first success across endpoints.
 
-        Walks endpoints starting after the previous fetch's start index, so
-        load spreads evenly across the four masters. A challenge or transport
-        failure moves on to the next endpoint.
+        The rotation starts after the previous fetch's start index so load
+        spreads across the masters. An endpoint marked down (consecutive-fails
+        >= threshold) is skipped unless it is due for a re-probe or is the only
+        candidate left.
         """
         self._sync_endpoints()
         urls = self.endpoints
@@ -165,7 +176,17 @@ class UpstreamClient:
         ordered = urls[start:] + urls[:start]
         retries = self._cfg().retries
         errors: list[Exception] = []
-        for url in ordered:
+        now = self._clock()
+
+        candidates = [
+            u for u in ordered
+            if self._statuses[u].down_until is None or self._statuses[u].down_until <= now
+        ]
+        if not candidates:
+            # everything is down (or skipped); force a full re-probe of the rotation
+            candidates = ordered
+
+        for url in candidates:
             for _ in range(1 + retries):
                 try:
                     return await self._attempt(url, bypass_solver)

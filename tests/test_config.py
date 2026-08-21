@@ -45,9 +45,10 @@ def test_load_minimal(tmp_path):
         "https://master1.example/a.json",
         "https://master2.example/a.json",
     ]
-    assert cfg.throttle.min_interval_s == 1.0
+    assert cfg.throttle.min_interval_s == 3.0
     assert cfg.background.base_interval_s == 60.0
     assert cfg.background.extended_interval_s == 300.0
+    assert cfg.background.jitter == 0.1
     assert cfg.datasources == []
 
 

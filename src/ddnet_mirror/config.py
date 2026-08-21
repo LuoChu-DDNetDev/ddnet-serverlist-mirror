@@ -22,6 +22,9 @@ class LoggingConfig(BaseModel):
     dir: str = "logs"
     max_bytes: int = 5 * 1024 * 1024  # rotate a single file once it exceeds this
     max_age_seconds: float = 7 * 24 * 3600  # rotate a file once it is this old
+    # File name template and the stamp inserted for the startup timestamp.
+    filename: str = "mirror_{stamp}.log"
+    timestamp_format: str = "%Y-%m-%d_%H-%M-%S"
 
 
 class CacheConfig(BaseModel):
@@ -33,6 +36,11 @@ class UpstreamConfig(BaseModel):
     timeout_s: float = 20.0
     retries: int = 2
     impersonate: str = "chrome"
+    # After this many *consecutive* failures an endpoint is removed from the
+    # round-robin rotation (so a dead master stops eating the full timeout).
+    down_after_fails: int = 2
+    # Seconds to wait before re-probing a downed endpoint to see if it recovered.
+    down_retry_after_s: float = 60.0
 
     @field_validator("endpoints")
     @classmethod
@@ -43,13 +51,19 @@ class UpstreamConfig(BaseModel):
 
 
 class ThrottleConfig(BaseModel):
-    min_interval_s: float = 1.0
+    # Single window controlling both: (a) the fastest one upstream re-request
+    # (single-flight coalescing) and (b) cache freshness — if the cache is newer
+    # than this an immediate request is answered from cache with an async
+    # background refresh kicked off, never blocking the response.
+    min_interval_s: float = 3.0
 
 
 class BackgroundConfig(BaseModel):
     base_interval_s: float = 60.0
     extend_after_idle_cycles: int = 5
     extended_interval_s: float = 300.0
+    # Fraction (+/-) jitter applied to background sleep to mask the polling rhythm.
+    jitter: float = 0.1
 
     @field_validator("extend_after_idle_cycles")
     @classmethod

@@ -42,23 +42,32 @@ All data endpoints return the upstream body byte-for-byte with
 
 ## Throttling & refresh model
 
-- At most **one** upstream fetch every `throttle.min_interval_s` (1s). A request
-  within 1s of the last cache write is served straight from cache.
+- At most **one** upstream fetch every `throttle.min_interval_s` (3s). A request
+  within 3s of the last cache write is answered from cache and an **async
+  background refresh** is kicked off (the response is not blocked); otherwise it
+  refreshes synchronously.
 - Concurrent immediate requests are **coalesced** into a single upstream fetch
   (single-flight), so any burst of traffic costs one request.
 - Background refresh runs every `background.base_interval_s` (1min). After
   `extend_after_idle_cycles` (5) consecutive cycles with no immediate request it
   backs off to `extended_interval_s` (5min). Any immediate request resets the
-  counters and restores the base cadence. Sleeps are jittered (±5s at 1min,
-  ±30s at 5min) so upstreams cannot detect a fixed polling rhythm.
+  counters and restores the base cadence. Sleeps are jittered by
+  `background.jitter` (±10%) so upstreams cannot detect a fixed polling rhythm.
 - Upstream load is round-robin across the four masters; a failed or
   challenge-gated endpoint falls through to the next one. Each background cycle
   polls **one** master (rotating), not all four.
+- A master that fails `upstream.down_after_fails` (2) times **in a row** drops
+  out of the rotation for `down_retry_after_s` (60s), then gets re-probed. This
+  keeps a permanently dead master from costing a full `timeout_s` on every
+  cycle. If every endpoint is down, the whole rotation is re-probed anyway.
 - `/api/v1/health` shows this round-robin poll state — no separate probe loop,
-  so checking health never adds load to the masters. The bypass service status
-  updates only when it is actually used to solve a challenge.
+  so checking health never adds load to the masters. Per master it reports
+  `total` / `fails` / `consec_fails` / `down_until` plus the last latency and
+  error. The bypass service status updates only when it is actually used to
+  solve a challenge.
 - If every upstream fails, the last cached copy is still served and
   `/api/v1/health` reports `status: degraded`.
+- The final health snapshot is written to the log on shutdown.
 
 ## Cloudflare bypass flow
 
@@ -86,6 +95,14 @@ YAML config (`config.yaml`), validated with pydantic on load. Hot reload via
 keeps serving; the failure is surfaced in `/api/v1/health`.
 
 See [config.yaml](config.yaml) for every option and its default.
+
+## Logging
+
+One log file per run, named from `logging.filename` (`mirror_{stamp}.log`) with
+`{stamp}` filled from `logging.timestamp_format` (`%Y-%m-%d_%H-%M-%S`) at
+startup. A file is rotated once it passes `logging.max_bytes` (5 MiB) or
+`logging.max_age_seconds` (7 days); rotated files keep the startup stamp and
+gain a `_1`, `_2`, ... suffix.
 
 ## External data source fusion
 

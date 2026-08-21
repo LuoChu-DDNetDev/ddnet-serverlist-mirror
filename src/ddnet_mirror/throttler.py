@@ -1,8 +1,11 @@
-"""Refresh orchestration: min-interval throttle, single-flight coalescing, background backoff.
+"""Refresh orchestration: throttle window, single-flight coalescing, background backoff.
 
 Rules (from spec):
-- Fastest one upstream re-request per `min_interval_s` (default 1s). A request
-  within 1s of the last cache write is served straight from cache.
+- A single `throttle.min_interval_s` window (default 3s) controls both the
+  fastest one upstream re-request (single-flight) and cache freshness.
+- If the cache is newer than the window, an immediate request is answered from
+  cache directly and an *async background refresh* is kicked off (non-blocking).
+  Otherwise it refreshes synchronously via the coalesced fetch.
 - Concurrent immediate requests coalesce into a single upstream fetch.
 - Background refresh starts at `base_interval_s` (1min). After N consecutive
   intervals with no immediate request, back off to `extended_interval_s` (5min).
@@ -24,10 +27,6 @@ from .config import BackgroundConfig, ConfigManager, ThrottleConfig
 
 logger = logging.getLogger(__name__)
 
-# Jitter (fraction) added to background sleep so upstreams cannot detect a fixed
-# polling rhythm: base_interval ±6s and extended_interval ±30s at the defaults.
-JITTER = 0.1
-
 
 class RefreshOrchestrator:
     def __init__(
@@ -48,6 +47,7 @@ class RefreshOrchestrator:
         self._last_immediate_ts: float | None = None
         self._current_interval = manager.config.background.base_interval_s
         self._bg_task: asyncio.Task | None = None
+        self._bg_refresh_task: asyncio.Task | None = None
         self.last_refresh_ok_ts: float | None = None
         self.last_refresh_error: str | None = None
 
@@ -64,13 +64,15 @@ class RefreshOrchestrator:
         return self._cache.read_raw()
 
     async def get_immediate(self) -> bytes | None:
-        """Serve cache; if it is stale by more than the min interval, refresh (coalesced)."""
+        """Serve cache; refresh behind the throttle window (async if fresh)."""
         now = self._clock()
         self._mark_immediate(now)
-        min_interval = self._throttle().min_interval_s
+        window = self._throttle().min_interval_s
         mtime = self._cache.mtime()
-        if mtime is not None and (now - mtime) < min_interval:
-            # Cache is fresher than the throttle window: no upstream call.
+        if mtime is not None and (now - mtime) < window:
+            # Cache is fresh: answer immediately and refresh in the background
+            # without blocking this response.
+            self._schedule_background_refresh()
             return self._cache.read_raw()
         await self._coalesced_refresh()
         return self._cache.read_raw()
@@ -79,6 +81,14 @@ class RefreshOrchestrator:
         self._last_immediate_ts = now
         self._idle_cycles = 0
         self._current_interval = self._bg().base_interval_s
+
+    def _schedule_background_refresh(self) -> None:
+        """Fire a single background refresh without waiting on it."""
+        if self._bg_refresh_task is not None and not self._bg_refresh_task.done():
+            return  # one already pending/in-flight
+        self._bg_refresh_task = asyncio.create_task(
+            self._coalesced_refresh(), name="async-immediate-refresh"
+        )
 
     # ------------------------------------------------------------ single-flight
     async def _coalesced_refresh(self) -> None:
@@ -120,13 +130,16 @@ class RefreshOrchestrator:
         )
 
     async def stop(self) -> None:
-        if self._bg_task is not None:
-            self._bg_task.cancel()
+        for task in (self._bg_task, self._bg_refresh_task):
+            if task is None:
+                continue
+            task.cancel()
             try:
-                await self._bg_task
+                await task
             except asyncio.CancelledError:
                 pass
-            self._bg_task = None
+        self._bg_task = None
+        self._bg_refresh_task = None
 
     def _decide(self, now: float, last_immediate: float | None, window: float) -> tuple[int, float]:
         """Compute (idle_cycles, next_interval) for a completed background window.
@@ -155,5 +168,6 @@ class RefreshOrchestrator:
                 pass
 
     def _jittered(self, interval: float) -> float:
-        """Sleep duration with up to JITTER (10%) random offset to mask the polling rhythm."""
-        return interval * (1.0 + (self._rng.random() * 2 - 1) * JITTER)
+        """Sleep duration with +/-jitter fraction to mask the polling rhythm."""
+        j = self._bg().jitter
+        return interval * (1.0 + (self._rng.random() * 2 - 1) * j)

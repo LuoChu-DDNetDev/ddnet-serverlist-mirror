@@ -31,8 +31,9 @@ def _setup_logging(cfg) -> None:
         try:
             log_dir = Path(cfg.logging.dir)
             log_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            path = log_dir / f"mirror_{stamp}.log"
+            stamp = datetime.now().strftime(cfg.logging.timestamp_format)
+            name = cfg.logging.filename.format(stamp=stamp)
+            path = log_dir / name
             handlers.append(
                 StartupRotatingFileHandler(
                     str(path),
@@ -96,6 +97,8 @@ def main() -> None:
         try:
             yield
         finally:
+            # Record the final health state at shutdown.
+            log.info("shutting down; final health: %s", health.snapshot())
             await orchestrator.stop()
             await health.stop()
             await upstream.close()

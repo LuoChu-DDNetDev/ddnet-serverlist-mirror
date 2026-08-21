@@ -54,11 +54,14 @@ class HealthAggregator:
                 st = EndpointStatus(url=url, host=host)
             upstream_status[host] = {
                 "ok": st.ok,
+                "total": st.total,
+                "fails": st.fails,
+                "consec_fails": st.consec_fails,
+                "down_until": st.down_until,
                 "latency_ms": st.latency_ms,
                 "last_error": st.last_error,
                 "last_ok_ts": st.last_ok_ts,
                 "last_try_ts": st.last_try_ts,
-                "tries": st.tries,
             }
 
         any_up_ok = any(s["ok"] for s in upstream_status.values())

@@ -184,3 +184,60 @@ async def test_invalid_json_rejected():
     cli, _ = make_client(urls, {urls[0]: lambda: FakeResp(200, b"not json")})
     with pytest.raises(AggregateUpstreamError):
         await cli.fetch()
+
+async def test_dead_endpoint_skipped_after_threshold():
+    urls = ["https://a.example/x", "https://b.example/x"]
+    clock = {"now": 1000.0}
+    cfg = UpstreamConfig(endpoints=urls, retries=0, down_after_fails=2, down_retry_after_s=60)
+
+    # a is down: skipped entirely, only b attempted
+    sess = FakeSession({urls[1]: lambda: FakeResp(200, OK_JSON)})
+    cli2 = UpstreamClient(cfg, clock=lambda: clock["now"], session_factory=lambda: sess)
+    cli2._mark_fail(urls[0], ConnectionError("down"))
+    cli2._mark_fail(urls[0], ConnectionError("down"))
+    assert cli2.statuses[urls[0]].consec_fails == 2
+    assert cli2.statuses[urls[0]].down_until == 1060.0
+    calls_before = len(sess.calls)
+    r = await cli2.fetch()
+    assert r.url == urls[1]
+    assert sess.calls[calls_before:] == [(urls[1], {})]  # 'a' NOT attempted
+    assert cli2.statuses[urls[0]].total == 2  # unchanged
+
+
+async def test_down_endpoint_reprobed_after_retry_window():
+    url = "https://a.example/x"
+    clock = {"now": 1000.0}
+    cfg = UpstreamConfig(endpoints=[url], retries=0, down_after_fails=2, down_retry_after_s=60)
+
+    class RecoverSession:
+        def __init__(self):
+            self.calls = []
+
+        async def get(self, url_, **kwargs):
+            self.calls.append(url_)
+            if clock["now"] >= 1100.0:
+                return FakeResp(200, OK_JSON)  # recovered after the retry window
+            raise ConnectionError("down")
+
+        async def close(self):
+            pass
+
+    sess = RecoverSession()
+    cli = UpstreamClient(cfg, clock=lambda: clock["now"], session_factory=lambda: sess)
+    cli._mark_fail(url, ConnectionError("down"))
+    cli._mark_fail(url, ConnectionError("down"))
+    assert cli.statuses[url].down_until == 1060.0
+
+    # within retry window: a is skipped but it is the only endpoint, so the
+    # all-down fallback still attempts it once (fails) instead of silently skipping.
+    with pytest.raises(AggregateUpstreamError):
+        await cli.fetch()
+    assert cli.statuses[url].total == 3
+
+    # past retry window -> a re-probed and recovers
+    clock["now"] = 1100.0
+    r = await cli.fetch()
+    assert r.url == url
+    assert cli.statuses[url].ok is True
+    assert cli.statuses[url].consec_fails == 0
+    assert cli.statuses[url].down_until is None

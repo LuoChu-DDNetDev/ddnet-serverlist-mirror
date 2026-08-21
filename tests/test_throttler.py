@@ -29,9 +29,9 @@ def set_age(path, age_s):
 
 
 @pytest.mark.asyncio
-async def test_hot_cache_does_not_refresh(tmp_path):
+async def test_fresh_cache_responds_immediately_with_async_refresh(tmp_path):
     manager, store = make_manager(tmp_path, b"hot")
-    set_age(store.path, 0.3)  # younger than the 1s throttle window
+    set_age(store.path, 0.3)  # within the (default 3s) fresh window
     calls = []
 
     async def refresher():
@@ -40,7 +40,10 @@ async def test_hot_cache_does_not_refresh(tmp_path):
     orch = RefreshOrchestrator(manager, store, refresher)
     body = await orch.get_immediate()
     assert body == b"hot"
-    assert calls == []
+    # A background refresh was scheduled (non-blocking) rather than awaited.
+    assert orch._bg_refresh_task is not None
+    await orch._bg_refresh_task  # let it run
+    assert calls == [1]
 
 
 @pytest.mark.asyncio
@@ -62,9 +65,9 @@ async def test_concurrent_requests_single_refresh(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_stale_cache_triggers_refresh(tmp_path):
+async def test_stale_cache_triggers_sync_refresh(tmp_path):
     manager, store = make_manager(tmp_path, b"old")
-    set_age(store.path, 1.5)  # older than the 1s window
+    set_age(store.path, 5)  # older than the 3s fresh window -> sync refresh
     calls = 0
 
     async def refresher():
@@ -126,9 +129,9 @@ def test_jitter_bounds():
     manager, store = make_manager_with_dummy()
     orch = RefreshOrchestrator(manager, store, lambda: None, rng=rng)
     base = manager.config.background.base_interval_s  # 60
-    # jitter is +/-8% around the interval
+    j = manager.config.background.jitter  # 0.1
     sleeps = [orch._jittered(base) for _ in range(200)]
-    assert all(base * 0.92 <= s <= base * 1.08 for s in sleeps)
+    assert all(base * (1 - j) <= s <= base * (1 + j) for s in sleeps)
     # distribution actually moves, not constant
     assert len(set(round(s, 3) for s in sleeps)) > 50
 
