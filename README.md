@@ -153,8 +153,36 @@ Tunnel, you can additionally protect it at the edge with a Cloudflare Access
 Service Token: set `access_client_id` / `access_client_secret` and A will send
 the `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers.
 
-Peer machines need a forwarder for `proxy_url` (tinyproxy, squid, or `ssh -D`),
-reachable only from Service A.
+### When do you actually need `proxy_url`?
+
+Only when Service A and the peer leave the internet through **different** public
+IPs. Check both machines:
+
+```bash
+curl -s https://ifconfig.me; echo
+```
+
+- **Same IP** (typical when both boxes sit behind one home/office router): leave
+  `proxy_url` unset. A replays the cookie from an IP Cloudflare already trusts,
+  nothing extra runs on the peer. `/health` still prints a `warn` for the unset
+  field — treat it as a reminder to verify, not as an error.
+- **Different IPs** (peer in another network, VPS, or a phone hotspot): the
+  replay has to physically originate from the peer, so that machine needs a
+  forwarder for A to dial, reachable **only** from Service A. Minimal tinyproxy:
+
+  ```ini
+  Port 8888
+  Listen 10.0.0.5        # peer's LAN address
+  Allow 10.0.0.7         # Service A, and nothing else
+  ```
+
+  `squid` or an `ssh -D` SOCKS tunnel work the same way; point `proxy_url` at
+  whichever you run (`socks5h://` for SOCKS, so DNS resolves on the peer).
+  Because the proxy tunnels A's own TLS connection, the `impersonate`
+  fingerprint stays A's — the forwarder only moves bytes.
+
+The proxy carries the bypass path only. Uncookied fetches always leave Service A
+directly, so a peer with no active cookie sees zero traffic.
 
 ### Bandwidth on a bypass peer
 

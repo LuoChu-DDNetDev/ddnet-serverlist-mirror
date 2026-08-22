@@ -7,9 +7,11 @@ Wants=network-online.target
 # If the machine has a display, add: Environment=DISPLAY=:0
 #
 # cf_clearance is bound to this machine's egress IP, so service A has to replay
-# the request from here as well. Run a forwarder next to this service (tinyproxy,
-# squid, or `ssh -D`) reachable only from A's address, and point that peer's
-# `proxy_url` in A's config.yaml at it, e.g.:
+# the request from here as well. If A and this host already share one public IP
+# (`curl -s https://ifconfig.me` matches on both), leave `proxy_url` unset and
+# nothing extra is needed. Otherwise run a forwarder next to this service
+# (tinyproxy, squid, or `ssh -D`) reachable only from A's address, and point that
+# peer's `proxy_url` in A's config.yaml at it, e.g.:
 #   peers:
 #     - name: gui-box-1
 #       base_url: http://<this-host>:9100

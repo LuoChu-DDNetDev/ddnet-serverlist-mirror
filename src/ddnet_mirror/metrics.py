@@ -118,7 +118,13 @@ uptime_seconds = Gauge(
 
 
 def render(snapshot: dict) -> bytes:
-    """Fill gauges from a health snapshot, then serialise the registry."""
+    """Fill gauges from a health snapshot, then serialise the registry.
+
+    A target that was never contacted yet emits *no* sample rather than a 0:
+    round-robin means later masters are untouched while the first ones answer,
+    and exporting them as down would page for endpoints that are simply idle.
+    Use `absent()` in alerting rules to catch a never-probed target.
+    """
     cache = snapshot.get("cache") or {}
     updated_at = cache.get("updated_at")
     if updated_at is not None:
@@ -127,8 +133,14 @@ def render(snapshot: dict) -> bytes:
     uptime_seconds.set((snapshot.get("process") or {}).get("uptime_seconds") or 0)
     config_ok.set(1 if (snapshot.get("config") or {}).get("status") == "ok" else 0)
     for host, st in (snapshot.get("upstream") or {}).items():
+        if not st.get("total"):
+            continue  # never attempted in this process
         endpoint_up.labels(host=host).set(1 if st.get("ok") else 0)
         endpoint_down_until.labels(host=host).set(st.get("down_until") or 0)
     for peer, st in ((snapshot.get("bypass") or {}).get("peers") or {}).items():
-        bypass_peer_up.labels(peer=peer).set(1 if st.get("ok") else 0)
+        probe = st.get("probe")
+        if probe:  # a reachability probe is a signal even before the first solve
+            bypass_peer_up.labels(peer=peer).set(1 if probe.get("ok") else 0)
+        elif st.get("solves") or st.get("fails"):
+            bypass_peer_up.labels(peer=peer).set(1 if st.get("ok") else 0)
     return generate_latest(REGISTRY)

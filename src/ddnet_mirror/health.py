@@ -78,8 +78,12 @@ class HealthAggregator:
             }
 
         any_up_ok = any(s["ok"] for s in upstream_status.values())
+        # Nothing has been fetched yet: a warm cache means the process started
+        # inside the throttle window and simply has not polled. Reporting that as
+        # degraded would make every restart look like an upstream outage.
+        never_tried = all(not s["total"] for s in upstream_status.values())
         cache_ok = self._cache.exists()
-        if cache_ok and any_up_ok:
+        if cache_ok and (any_up_ok or never_tried):
             overall = "running"
         elif cache_ok:
             overall = "degraded"  # serving stale cache, upstream unreachable
